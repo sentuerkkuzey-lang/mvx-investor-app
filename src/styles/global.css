@@ -161,7 +161,7 @@ select:focus {
   min-height: 100vh;
   max-width: 640px;
   margin: 0 auto;
-  padding: 20px 20px 48px;
+  padding: 20px 20px calc(88px + env(safe-area-inset-bottom));
 }
 
 /* HEADER */
@@ -191,7 +191,7 @@ select:focus {
   gap: 8px;
 }
 
-/* NAV */
+/* NAV (alt, wird nicht mehr verwendet, bleibt für Kompatibilität) */
 
 .nav {
   display: flex;
@@ -389,7 +389,8 @@ select:focus {
 
 /* Dringlichkeits-Rand der Abstimmungskarte */
 .urgency-border-normal {
-  border-color: var(--hairline);
+  border-color: rgba(255, 255, 255, 0.7);
+  border-width: 2px;
 }
 
 .urgency-border-urgent {
@@ -400,6 +401,17 @@ select:focus {
 .urgency-border-emergency {
   border-color: #ef4444;
   border-width: 2px;
+}
+
+/* Hinweiskarte auf dem Dashboard für offene dringende/Notfall-Abstimmungen */
+.urgency-alert {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+}
+
+.urgency-alert:hover {
+  opacity: 0.9;
 }
 
 /* Dringlichkeits-Auswahl im Formular */
@@ -531,5 +543,220 @@ select:focus {
   .investor-shares {
     width: 100%;
     justify-content: space-between;
+  }
+}
+
+/* TEXTAREA */
+
+textarea {
+  width: 100%;
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid var(--hairline);
+  background: var(--elevated);
+  color: var(--foreground);
+  font-size: 16px;
+  margin-bottom: 12px;
+  font-family: inherit;
+  resize: vertical;
+}
+
+textarea:focus {
+  outline: 2px solid var(--foreground);
+  outline-offset: 1px;
+}
+
+/* CHECKBOX ROW */
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.9rem;
+  color: var(--foreground);
+  cursor: pointer;
+}
+
+.checkbox-row input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+  accent-color: var(--foreground);
+}
+
+input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--foreground);
+  flex-shrink: 0;
+}
+
+input[type="file"] {
+  padding: 10px 0;
+  border: none;
+  background: transparent;
+  color: var(--muted-foreground);
+  font-size: 14px;
+}
+
+/* NEWS */
+
+.news-card-head h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.badge-pinned {
+  color: var(--foreground);
+  border-color: var(--hairline);
+  background: var(--elevated);
+}
+
+/* DOCUMENTS */
+
+.document-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--hairline);
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.document-row:last-child {
+  border-bottom: none;
+}
+
+/* OWNER STATS */
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.stat-box {
+  background: var(--elevated);
+  border: 1px solid var(--hairline);
+  border-radius: 14px;
+  padding: 14px;
+  text-align: center;
+}
+
+.stat-number {
+  font-family: var(--font-display);
+  font-size: clamp(1.3rem, 5vw, 1.8rem);
+  margin: 4px 0 0;
+}
+
+.dist-row {
+  margin-bottom: 12px;
+}
+
+.dist-label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.9rem;
+  margin-bottom: 6px;
+}
+
+/* BULK ACTIONS */
+
+.bulk-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 12px;
+  margin-bottom: 14px;
+  border-radius: 12px;
+  background: var(--elevated);
+  border: 1px solid var(--hairline);
+}
+
+/* ACTIVITY LOG */
+
+.activity-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.activity-row:last-child {
+  border-bottom: none;
+}
+
+@media (max-width: 480px) {
+  .stats-grid {
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+  }
+
+  .stat-box {
+    padding: 10px 6px;
+  }
+
+  .activity-row {
+    flex-direction: column;
+    gap: 2px;
+  }
+}
+
+/* BOTTOM NAV (Tab-Leiste, fix am unteren Bildschirmrand) */
+
+.bottom-nav {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 50;
+  display: flex;
+  justify-content: space-around;
+  align-items: stretch;
+  max-width: 640px;
+  margin: 0 auto;
+  background: color-mix(in srgb, var(--card) 92%, transparent);
+  backdrop-filter: blur(16px);
+  border-top: 1px solid var(--hairline);
+  padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
+}
+
+.bottom-nav-link {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 6px 2px;
+  text-decoration: none;
+  color: var(--muted-foreground);
+  border-radius: 12px;
+  transition: color 0.15s;
+}
+
+.bottom-nav-link span {
+  font-size: 0.62rem;
+  font-weight: 600;
+  white-space: nowrap;
+  letter-spacing: -0.01em;
+}
+
+.bottom-nav-link.active {
+  color: var(--foreground);
+}
+
+.bottom-nav-link.active svg {
+  filter: drop-shadow(0 0 6px rgba(255, 255, 255, 0.25));
+}
+
+@media (max-width: 380px) {
+  .bottom-nav-link span {
+    font-size: 0.56rem;
   }
 }
