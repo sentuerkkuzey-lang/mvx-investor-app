@@ -77,6 +77,21 @@ Deno.serve(async (req: Request) => {
 
     if (createError) return json({ error: createError.message }, 400);
 
+    // Aktivität protokollieren (service_role umgeht RLS, daher direktes Insert).
+    const { data: callerFullName } = await callerClient
+      .from("profiles")
+      .select("full_name")
+      .eq("id", user.id)
+      .single();
+
+    await adminClient.from("activity_log").insert({
+      actor_id: user.id,
+      actor_name: callerFullName?.full_name ?? "Owner",
+      action: "investor_created",
+      target_label: fullName,
+      details: { email, shares }
+    });
+
     return json({ email, tempPassword, userId: created.user?.id });
   } catch (e) {
     return json({ error: String(e) }, 500);
