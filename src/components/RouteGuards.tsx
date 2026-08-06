@@ -1,6 +1,7 @@
 import { ReactNode } from "react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import BottomNav from "./BottomNav";
 
 export function RequireAuth({ children }: { children: ReactNode }) {
   const { session, profile, loading } = useAuth();
@@ -9,7 +10,12 @@ export function RequireAuth({ children }: { children: ReactNode }) {
   if (!session) return <Navigate to="/login" replace />;
   if (profile?.first_login) return <Navigate to="/passwort-aendern" replace />;
 
-  return <>{children}</>;
+  return (
+    <>
+      {children}
+      <BottomNav />
+    </>
+  );
 }
 
 export function RequireOwner({ children }: { children: ReactNode }) {
