@@ -352,3 +352,368 @@ on public.push_subscriptions for all
 using (auth.uid() = user_id)
 with check (auth.uid() = user_id);
 -- ============================================================
+
+-- ============================================================
+-- AKTIVITÄTSPROTOKOLL
+-- ============================================================
+
+create table if not exists public.activity_log (
+  id uuid primary key default gen_random_uuid(),
+  actor_id uuid references public.profiles(id) on delete set null,
+  actor_name text,
+  action text not null,
+  target_label text,
+  details jsonb,
+  created_at timestamptz not null default now()
+);
+
+alter table public.activity_log enable row level security;
+
+drop policy if exists "activity_log_owner_select" on public.activity_log;
+create policy "activity_log_owner_select"
+on public.activity_log for select
+using (public.is_owner());
+
+-- Einträge landen ausschließlich über diese Funktion in der Tabelle
+-- (kein direktes Insert von außen), damit niemand sich selbst
+-- gefälschte Log-Einträge erzeugen kann.
+create or replace function public.log_activity(p_action text, p_target_label text, p_details jsonb default null)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_name text;
+begin
+  if not public.is_owner() then
+    raise exception 'Nur der Owner kann Aktivitäten protokollieren.';
+  end if;
+
+  select full_name into v_name from public.profiles where id = auth.uid();
+
+  insert into public.activity_log (actor_id, actor_name, action, target_label, details)
+  values (auth.uid(), coalesce(v_name, 'Owner'), p_action, p_target_label, p_details);
+end;
+$$;
+
+grant execute on function public.log_activity(text, text, jsonb) to authenticated;
+
+-- owner_add_shares protokolliert jetzt automatisch mit.
+create or replace function public.owner_add_shares(p_user_id uuid, p_amount integer)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_name text;
+begin
+  if not public.is_owner() then
+    raise exception 'Nur der Owner darf Anteile vergeben.';
+  end if;
+
+  if p_amount = 0 then
+    return;
+  end if;
+
+  update public.profiles
+  set shares = greatest(0, shares + p_amount)
+  where id = p_user_id
+  returning full_name into v_name;
+
+  if v_name is null then
+    raise exception 'Investor nicht gefunden.';
+  end if;
+
+  perform public.log_activity(
+    case when p_amount > 0 then 'shares_added' else 'shares_removed' end,
+    v_name,
+    jsonb_build_object('amount', p_amount, 'user_id', p_user_id)
+  );
+end;
+$$;
+
+grant execute on function public.owner_add_shares(uuid, integer) to authenticated;
+
+-- Anteile für mehrere Investoren gleichzeitig anpassen (Bulk-Aktion).
+create or replace function public.owner_bulk_add_shares(p_user_ids uuid[], p_amount integer)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_user_id uuid;
+  v_count integer := 0;
+begin
+  if not public.is_owner() then
+    raise exception 'Nur der Owner darf Anteile vergeben.';
+  end if;
+
+  if p_amount = 0 or array_length(p_user_ids, 1) is null then
+    return;
+  end if;
+
+  foreach v_user_id in array p_user_ids loop
+    update public.profiles
+    set shares = greatest(0, shares + p_amount)
+    where id = v_user_id;
+    if found then
+      v_count := v_count + 1;
+    end if;
+  end loop;
+
+  perform public.log_activity(
+    'shares_bulk_added',
+    v_count || ' Investoren',
+    jsonb_build_object('amount', p_amount, 'user_ids', p_user_ids, 'count', v_count)
+  );
+end;
+$$;
+
+grant execute on function public.owner_bulk_add_shares(uuid[], integer) to authenticated;
+
+-- create_poll protokolliert jetzt automatisch mit.
+create or replace function public.create_poll(
+  p_question text,
+  p_description text,
+  p_options text[],
+  p_closes_at timestamptz default null,
+  p_urgency text default 'normal'
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_poll_id uuid;
+  v_option text;
+  v_position integer := 0;
+begin
+  if not public.is_owner() then
+    raise exception 'Nur der Owner darf Abstimmungen erstellen.';
+  end if;
+
+  if p_question is null or length(trim(p_question)) = 0 then
+    raise exception 'Frage darf nicht leer sein.';
+  end if;
+
+  if array_length(p_options, 1) is null or array_length(p_options, 1) < 2 then
+    raise exception 'Mindestens 2 Optionen erforderlich.';
+  end if;
+
+  if p_urgency not in ('normal', 'urgent', 'emergency') then
+    raise exception 'Ungültige Dringlichkeit.';
+  end if;
+
+  insert into public.polls (question, description, created_by, closes_at, urgency)
+  values (
+    trim(p_question),
+    nullif(trim(coalesce(p_description, '')), ''),
+    auth.uid(),
+    p_closes_at,
+    p_urgency
+  )
+  returning id into v_poll_id;
+
+  foreach v_option in array p_options loop
+    if length(trim(v_option)) > 0 then
+      insert into public.poll_options (poll_id, label, position)
+      values (v_poll_id, trim(v_option), v_position);
+      v_position := v_position + 1;
+    end if;
+  end loop;
+
+  perform public.log_activity('poll_created', trim(p_question), jsonb_build_object('poll_id', v_poll_id, 'urgency', p_urgency));
+
+  return v_poll_id;
+end;
+$$;
+
+grant execute on function public.create_poll(text, text, text[], timestamptz, text) to authenticated;
+
+-- close_poll protokolliert jetzt automatisch mit.
+create or replace function public.close_poll(p_poll_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_question text;
+begin
+  if not public.is_owner() then
+    raise exception 'Nur der Owner darf Abstimmungen schließen.';
+  end if;
+
+  update public.polls set status = 'closed' where id = p_poll_id
+  returning question into v_question;
+
+  perform public.log_activity('poll_closed', coalesce(v_question, p_poll_id::text), jsonb_build_object('poll_id', p_poll_id));
+end;
+$$;
+
+grant execute on function public.close_poll(uuid) to authenticated;
+-- ============================================================
+
+-- ============================================================
+-- NEWS / UPDATES
+-- ============================================================
+
+create table if not exists public.news_posts (
+  id uuid primary key default gen_random_uuid(),
+  title text not null,
+  content text not null,
+  pinned boolean not null default false,
+  created_by uuid not null references public.profiles(id),
+  created_at timestamptz not null default now()
+);
+
+alter table public.news_posts enable row level security;
+
+drop policy if exists "news_select_all" on public.news_posts;
+create policy "news_select_all"
+on public.news_posts for select
+using (auth.uid() is not null);
+
+drop policy if exists "news_owner_manage" on public.news_posts;
+create policy "news_owner_manage"
+on public.news_posts for all
+using (public.is_owner())
+with check (public.is_owner());
+
+-- Erstellen läuft über diese Funktion, damit gleichzeitig ein
+-- Aktivitäts-Log-Eintrag entsteht.
+create or replace function public.create_news_post(p_title text, p_content text, p_pinned boolean default false)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_id uuid;
+begin
+  if not public.is_owner() then
+    raise exception 'Nur der Owner darf Neuigkeiten veröffentlichen.';
+  end if;
+
+  if p_title is null or length(trim(p_title)) = 0 then
+    raise exception 'Titel darf nicht leer sein.';
+  end if;
+
+  insert into public.news_posts (title, content, pinned, created_by)
+  values (trim(p_title), coalesce(p_content, ''), p_pinned, auth.uid())
+  returning id into v_id;
+
+  perform public.log_activity('news_posted', trim(p_title), jsonb_build_object('news_id', v_id));
+
+  return v_id;
+end;
+$$;
+
+grant execute on function public.create_news_post(text, text, boolean) to authenticated;
+
+create or replace function public.delete_news_post(p_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_title text;
+begin
+  if not public.is_owner() then
+    raise exception 'Nur der Owner darf Neuigkeiten löschen.';
+  end if;
+
+  delete from public.news_posts where id = p_id returning title into v_title;
+  perform public.log_activity('news_deleted', coalesce(v_title, p_id::text), jsonb_build_object('news_id', p_id));
+end;
+$$;
+
+grant execute on function public.delete_news_post(uuid) to authenticated;
+-- ============================================================
+
+-- ============================================================
+-- DOKUMENTE
+-- ============================================================
+
+-- Hinweis: Der Storage-Bucket 'documents' muss einmalig manuell
+-- angelegt werden: Supabase Dashboard -> Storage -> New bucket ->
+-- Name "documents", Public: AUS. Die Policies unten regeln dann,
+-- wer lesen/schreiben darf.
+
+create table if not exists public.documents (
+  id uuid primary key default gen_random_uuid(),
+  title text not null,
+  description text,
+  storage_path text not null,
+  file_name text not null,
+  file_size bigint,
+  uploaded_by uuid not null references public.profiles(id),
+  created_at timestamptz not null default now()
+);
+
+alter table public.documents enable row level security;
+
+drop policy if exists "documents_select_all" on public.documents;
+create policy "documents_select_all"
+on public.documents for select
+using (auth.uid() is not null);
+
+drop policy if exists "documents_owner_insert" on public.documents;
+create policy "documents_owner_insert"
+on public.documents for insert
+with check (public.is_owner());
+
+drop policy if exists "documents_owner_delete" on public.documents;
+create policy "documents_owner_delete"
+on public.documents for delete
+using (public.is_owner());
+
+create or replace function public.log_document_upload(p_title text, p_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  perform public.log_activity('document_uploaded', p_title, jsonb_build_object('document_id', p_id));
+end;
+$$;
+
+grant execute on function public.log_document_upload(text, uuid) to authenticated;
+
+create or replace function public.log_document_delete(p_title text, p_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  perform public.log_activity('document_deleted', p_title, jsonb_build_object('document_id', p_id));
+end;
+$$;
+
+grant execute on function public.log_document_delete(text, uuid) to authenticated;
+
+-- Storage-Policies für den Bucket 'documents': jeder eingeloggte
+-- Nutzer darf lesen (Downloads über signierte URLs), nur der Owner
+-- darf hochladen/löschen.
+drop policy if exists "documents_storage_select" on storage.objects;
+create policy "documents_storage_select"
+on storage.objects for select
+using (bucket_id = 'documents' and auth.uid() is not null);
+
+drop policy if exists "documents_storage_owner_write" on storage.objects;
+create policy "documents_storage_owner_write"
+on storage.objects for insert
+with check (bucket_id = 'documents' and public.is_owner());
+
+drop policy if exists "documents_storage_owner_delete" on storage.objects;
+create policy "documents_storage_owner_delete"
+on storage.objects for delete
+using (bucket_id = 'documents' and public.is_owner());
+-- ============================================================
